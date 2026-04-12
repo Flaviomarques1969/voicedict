@@ -21,6 +21,7 @@ class StateMachine {
     let hotkeyMonitor = HotkeyMonitor()
 
     private var audioEngine: AVAudioEngine?
+    private var warmEngine: AVAudioEngine? // Pre-created engine for fast start
     private var activationWork: DispatchWorkItem?
     private var lastProcessingEndTime: Date = .distantPast
 
@@ -31,6 +32,10 @@ class StateMachine {
             self?.handleHotkeyEvent(event)
         }
         hotkeyMonitor.start()
+
+        // Pre-create audio engine for fast first recording
+        warmEngine = AVAudioEngine()
+        Log.d("AudioEngine pre-criado")
     }
 
     func stop() {
@@ -101,7 +106,9 @@ class StateMachine {
         state = .listening
         onStateChanged?(.listening)
 
-        let engine = AVAudioEngine()
+        // Use pre-created engine if available, otherwise create new
+        let engine = warmEngine ?? AVAudioEngine()
+        warmEngine = nil
         audioEngine = engine
 
         let started = whisperService.startRecording(engine: engine)
@@ -138,6 +145,9 @@ class StateMachine {
 
             self.state = .idle
             self.onStateChanged?(.idle)
+
+            // Pre-create engine for next recording
+            self.warmEngine = AVAudioEngine()
         }
     }
 }

@@ -116,13 +116,17 @@ class WhisperService {
     private func runWhisper(audioPath: String) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: whisperBin)
+        let nThreads = ProcessInfo.processInfo.activeProcessorCount
         process.arguments = [
             "-m", modelPath,
             "-f", audioPath,
-            "-l", "pt",           // Portuguese
-            "--no-timestamps",    // Clean output without timestamps
-            "-t", "4",            // 4 threads
+            "-l", "pt",              // Portuguese
+            "--no-timestamps",       // Clean output
+            "-t", "\(nThreads)",     // All CPU cores
+            "--beam-size", "1",      // Greedy decoding (faster)
+            "--flash-attn",          // Flash attention (Metal)
             "--print-special", "false",
+            "--no-prints",           // Suppress progress
         ]
 
         // Suppress Metal/GPU debug logs
