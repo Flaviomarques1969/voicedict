@@ -1,0 +1,4 @@
+.build/
+VoiceDict.app/
+vendor/
+*.log
