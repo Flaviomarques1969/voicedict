@@ -28,6 +28,8 @@ class StateMachine {
     // MARK: Lifecycle
 
     func start() {
+        whisperService.startServer()
+
         hotkeyMonitor.onEvent = { [weak self] event in
             self?.handleHotkeyEvent(event)
         }
@@ -41,6 +43,7 @@ class StateMachine {
     func stop() {
         hotkeyMonitor.stop()
         cancelActivation()
+        whisperService.stopServer()
     }
 
     // MARK: Event handling
