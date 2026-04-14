@@ -22,7 +22,5 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>VoiceDict precisa do microfone para capturar sua voz durante o ditado.</string>
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>VoiceDict usa reconhecimento de fala para transcrever sua voz em texto.</string>
 </dict>
 </plist>

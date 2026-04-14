@@ -1,6 +1,5 @@
 import Cocoa
 import AVFoundation
-import Speech
 
 enum Permissions {
 
@@ -16,9 +15,5 @@ enum Permissions {
 
     static func requestMicrophone(completion: @escaping (Bool) -> Void) {
         AVCaptureDevice.requestAccess(for: .audio, completionHandler: completion)
-    }
-
-    static func requestSpeechRecognition(completion: @escaping (SFSpeechRecognizerAuthorizationStatus) -> Void) {
-        SFSpeechRecognizer.requestAuthorization(completion)
     }
 }

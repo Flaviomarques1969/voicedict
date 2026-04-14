@@ -8,12 +8,18 @@ class WhisperService {
     private var audioFilePath: String?
 
     init() {
-        // Paths relative to the app bundle's parent (or absolute for dev)
-        let base = "/Users/imac/sistemas pequenos - ferramentas/voicedict/vendor/whisper.cpp"
-        whisperBin = "\(base)/build/bin/whisper-cli"
-        modelPath = "\(base)/models/ggml-medium.bin"
+        let appSupport = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/VoiceDict")
+        whisperBin = appSupport.appendingPathComponent("bin/whisper-cli").path
 
-        Log.d("WhisperService: bin=\(FileManager.default.fileExists(atPath: whisperBin)), model=\(FileManager.default.fileExists(atPath: modelPath))")
+        // Prefer small model (fast) — fallback to medium if small not available
+        let modelsDir = appSupport.appendingPathComponent("models")
+        let small = modelsDir.appendingPathComponent("ggml-small.bin").path
+        let medium = modelsDir.appendingPathComponent("ggml-medium.bin").path
+        modelPath = FileManager.default.fileExists(atPath: small) ? small : medium
+
+        let modelName = (modelPath as NSString).lastPathComponent
+        Log.d("WhisperService: bin=\(FileManager.default.fileExists(atPath: whisperBin)), model=\(modelName)")
     }
 
     /// Start recording to a WAV file. Call from main thread.
@@ -87,11 +93,18 @@ class WhisperService {
             return
         }
 
-        Log.d("WhisperService: transcrevendo...")
+        // Log file size to verify audio was captured
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+        Log.d("WhisperService: transcrevendo... WAV=\(fileSize) bytes")
 
         // Run whisper-cli in background
         DispatchQueue.global().async { [self] in
             let result = self.runWhisper(audioPath: path)
+
+            // Keep last recording for debugging at fixed path
+            let debugPath = NSTemporaryDirectory() + "voicedict_last.wav"
+            try? FileManager.default.removeItem(atPath: debugPath)
+            try? FileManager.default.copyItem(atPath: path, toPath: debugPath)
 
             // Cleanup temp file
             try? FileManager.default.removeItem(atPath: path)
@@ -125,7 +138,6 @@ class WhisperService {
             "-t", "\(nThreads)",     // All CPU cores
             "--beam-size", "1",      // Greedy decoding (faster)
             "--flash-attn",          // Flash attention (Metal)
-            "--print-special", "false",
             "--no-prints",           // Suppress progress
         ]
 
@@ -134,15 +146,40 @@ class WhisperService {
         process.environment?["GGML_METAL_LOG_LEVEL"] = "0"
 
         let pipe = Pipe()
+        let errPipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
+        process.standardError = errPipe
 
         do {
             try process.run()
+
+            // Timeout: kill whisper if it hangs beyond 30s
+            let timeoutWork = DispatchWorkItem {
+                if process.isRunning {
+                    Log.d("WhisperService: timeout 30s — terminando processo")
+                    process.terminate()
+                }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeoutWork)
             process.waitUntilExit()
+            timeoutWork.cancel()
+
+            // Log stderr for debugging
+            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            if let errStr = String(data: errData, encoding: .utf8), !errStr.isEmpty {
+                let lastLines = errStr.components(separatedBy: "\n").suffix(3).joined(separator: " | ")
+                Log.d("WhisperService stderr: \(lastLines)")
+            }
+
+            guard process.terminationStatus == 0 else {
+                Log.d("WhisperService: processo terminou com status \(process.terminationStatus)")
+                return nil
+            }
 
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             guard let output = String(data: data, encoding: .utf8) else { return nil }
+
+            Log.d("WhisperService: saída bruta = '\(output.trimmingCharacters(in: .whitespacesAndNewlines))'")
 
             // Clean whisper output: remove special tokens and trim
             var text = output

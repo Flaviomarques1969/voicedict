@@ -63,16 +63,34 @@ else
     echo "  ✓ Modelo medium já existe"
 fi
 
-# 4. Build VoiceDict
+# 4. Install whisper binary and model to Application Support
+SUPPORT_DIR="$HOME/Library/Application Support/VoiceDict"
+echo ""
+echo "▸ Instalando whisper em $SUPPORT_DIR..."
+mkdir -p "$SUPPORT_DIR/bin"
+mkdir -p "$SUPPORT_DIR/models"
+
+cp "$PROJECT_DIR/vendor/whisper.cpp/build/bin/whisper-cli" "$SUPPORT_DIR/bin/"
+echo "  ✓ whisper-cli copiado"
+
+if [ ! -f "$SUPPORT_DIR/models/ggml-medium.bin" ]; then
+    echo "▸ Copiando modelo (~1.5GB)... aguarde"
+    cp "$PROJECT_DIR/vendor/whisper.cpp/models/ggml-medium.bin" "$SUPPORT_DIR/models/"
+    echo "  ✓ Modelo copiado"
+else
+    echo "  ✓ Modelo já instalado"
+fi
+
+# 5. Build VoiceDict
 echo ""
 echo "▸ Compilando VoiceDict..."
 swift build -c release 2>&1 | tail -2
 
-# 5. Create .app bundle
+# 6. Create .app bundle
 echo "▸ Montando VoiceDict.app..."
 bash Scripts/build.sh 2>&1 | tail -2
 
-# 6. Install to /Applications
+# 7. Install to /Applications
 echo ""
 echo "▸ Instalando em /Applications..."
 rm -rf /Applications/VoiceDict.app

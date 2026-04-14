@@ -14,8 +14,6 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("Cocoa"),
                 .linkedFramework("AVFoundation"),
-                .linkedFramework("Speech"),
-                .linkedFramework("UserNotifications"),
             ]
         )
     ]
