@@ -9,8 +9,17 @@ class WhisperService {
     private let serverPort = 8178
 
     private var serverProcess: Process?
+    private var serverReady = false
     private var audioFile: AVAudioFile?
     private var audioFilePath: String?
+
+    // Dedicated URLSession for server communication (reused, no caching)
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForResource = 30
+        return URLSession(configuration: config)
+    }()
 
     init() {
         appSupport = FileManager.default.homeDirectoryForCurrentUser
@@ -36,7 +45,16 @@ class WhisperService {
             Log.d("WhisperService: whisper-server não encontrado, usando CLI")
             return
         }
-        guard serverProcess == nil else { return }
+
+        // Kill any orphan server from a previous crash
+        killOrphanServer()
+
+        launchServerProcess()
+    }
+
+    private func launchServerProcess() {
+        guard serverProcess == nil || serverProcess?.isRunning == false else { return }
+        serverReady = false
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: serverBin)
@@ -55,17 +73,37 @@ class WhisperService {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
 
+        // Auto-restart on crash
+        process.terminationHandler = { [weak self] proc in
+            guard let self = self else { return }
+            self.serverReady = false
+            if proc.terminationStatus != 0 && proc.terminationReason != .exit {
+                Log.d("WhisperService: servidor crashou (status \(proc.terminationStatus)) — reiniciando...")
+                DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                    self.serverProcess = nil
+                    self.launchServerProcess()
+                }
+            }
+        }
+
         do {
             try process.run()
             serverProcess = process
             Log.d("WhisperService: servidor iniciado (PID \(process.processIdentifier), porta \(serverPort))")
 
-            // Wait for server to become ready
-            DispatchQueue.global().async { [self] in
+            // Wait for server to become ready (background, non-blocking)
+            DispatchQueue.global().async { [weak self] in
+                guard let self = self else { return }
                 for _ in 0..<40 { // up to 20 seconds
                     Thread.sleep(forTimeInterval: 0.5)
-                    if self.isServerReady() {
+                    if self.pingServer() {
+                        self.serverReady = true
                         Log.d("WhisperService: servidor pronto (modelo na GPU)")
+                        return
+                    }
+                    // Server died during startup
+                    guard self.serverProcess?.isRunning == true else {
+                        Log.d("WhisperService: servidor morreu durante startup")
                         return
                     }
                 }
@@ -77,29 +115,43 @@ class WhisperService {
     }
 
     func stopServer() {
-        if let process = serverProcess, process.isRunning {
+        guard let process = serverProcess else { return }
+        // Disable auto-restart before terminating
+        process.terminationHandler = nil
+        if process.isRunning {
             process.terminate()
-            Log.d("WhisperService: servidor parado")
+            process.waitUntilExit() // Prevent zombie
         }
         serverProcess = nil
+        serverReady = false
+        Log.d("WhisperService: servidor parado")
     }
 
-    private func isServerReady() -> Bool {
+    private func killOrphanServer() {
+        // Kill any whisper-server on our port from a previous crash
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        task.arguments = ["-f", "whisper-server.*--port \(serverPort)"]
+        try? task.run()
+        task.waitUntilExit()
+    }
+
+    private func pingServer() -> Bool {
         guard let url = URL(string: "http://127.0.0.1:\(serverPort)/health") else { return false }
         var request = URLRequest(url: url)
         request.timeoutInterval = 1
         let sem = DispatchSemaphore(value: 0)
         var ok = false
-        URLSession.shared.dataTask(with: request) { data, response, _ in
+        session.dataTask(with: request) { _, response, _ in
             if let http = response as? HTTPURLResponse, http.statusCode == 200 { ok = true }
             sem.signal()
         }.resume()
-        sem.wait()
+        _ = sem.wait(timeout: .now() + 2) // Never block forever
         return ok
     }
 
     private var useServer: Bool {
-        serverProcess?.isRunning == true && isServerReady()
+        serverReady && serverProcess?.isRunning == true
     }
 
     // MARK: - Recording
@@ -140,10 +192,14 @@ class WhisperService {
                 return buffer
             }
 
-            if error == nil, convertedBuffer.frameLength > 0 {
+            if let error = error {
+                Log.d("WhisperService: erro converter: \(error.localizedDescription)")
+            } else if convertedBuffer.frameLength > 0 {
                 do {
                     try file.write(from: convertedBuffer)
-                } catch {}
+                } catch {
+                    Log.d("WhisperService: erro ao gravar buffer: \(error.localizedDescription)")
+                }
             }
         }
 
@@ -174,6 +230,15 @@ class WhisperService {
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
         Log.d("WhisperService: transcrevendo... WAV=\(fileSize) bytes")
 
+        // Skip transcription for tiny files (likely silence/noise)
+        if fileSize < 8000 {
+            Log.d("WhisperService: arquivo muito pequeno (\(fileSize)b), ignorando")
+            try? FileManager.default.removeItem(atPath: path)
+            completion(nil)
+            audioFilePath = nil
+            return
+        }
+
         DispatchQueue.global().async { [self] in
             let start = CFAbsoluteTimeGetCurrent()
 
@@ -181,6 +246,7 @@ class WhisperService {
             if self.useServer {
                 result = self.transcribeViaServer(audioPath: path)
             } else {
+                Log.d("WhisperService: servidor indisponível, usando CLI (mais lento)")
                 result = self.transcribeViaCLI(audioPath: path)
             }
 
@@ -220,19 +286,16 @@ class WhisperService {
         let boundary = "VoiceDict-\(UUID().uuidString)"
         var body = Data()
 
-        // file field
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n".data(using: .utf8)!)
         body.append("Content-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
         body.append(fileData)
         body.append("\r\n".data(using: .utf8)!)
 
-        // response_format field
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"response_format\"\r\n\r\n".data(using: .utf8)!)
         body.append("text\r\n".data(using: .utf8)!)
 
-        // language field
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"language\"\r\n\r\n".data(using: .utf8)!)
         body.append("pt\r\n".data(using: .utf8)!)
@@ -243,22 +306,31 @@ class WhisperService {
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
-        request.timeoutInterval = 30
+        request.timeoutInterval = 15
 
         let sem = DispatchSemaphore(value: 0)
         var result: String?
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        session.dataTask(with: request) { data, response, error in
             defer { sem.signal() }
             if let error = error {
                 Log.d("WhisperService [server]: erro HTTP: \(error.localizedDescription)")
+                return
+            }
+            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                Log.d("WhisperService [server]: HTTP \(http.statusCode)")
                 return
             }
             guard let data = data, let text = String(data: data, encoding: .utf8) else { return }
             result = self.cleanWhisperOutput(text)
         }.resume()
 
-        sem.wait()
+        // CRITICAL: Never block forever — 15s max wait
+        let waitResult = sem.wait(timeout: .now() + 15)
+        if waitResult == .timedOut {
+            Log.d("WhisperService [server]: timeout 15s — fallback CLI")
+            return transcribeViaCLI(audioPath: audioPath)
+        }
         return result
     }
 

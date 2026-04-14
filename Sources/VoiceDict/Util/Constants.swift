@@ -20,6 +20,8 @@ enum Config {
 
     // Log
     static let logFile = "/tmp/voicedict.log"
+    static let logMaxSize = 512 * 1024 // 512KB — rotate if exceeded
+    static let logKeepLines = 500      // Keep last N lines on rotation
 }
 
 // MARK: - File logger (debug)
@@ -30,19 +32,40 @@ enum Log {
         return FileHandle(forWritingAtPath: Config.logFile)
     }()
 
+    // Cached DateFormatter — expensive to create, reuse across all log calls
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss.SSS"
+        return f
+    }()
+
+    private static var bytesWritten = 0
+
     static func d(_ msg: String) {
-        let line = "[VoiceDict \(timestamp())] \(msg)\n"
+        let line = "[VoiceDict \(formatter.string(from: Date()))] \(msg)\n"
         if let data = line.data(using: .utf8) {
             handle?.seekToEndOfFile()
             handle?.write(data)
+            bytesWritten += data.count
+
+            // Rotate if log exceeds max size
+            if bytesWritten > Config.logMaxSize {
+                rotateLog()
+            }
         }
-        // Also NSLog for system console
         NSLog("[VoiceDict] %@", msg)
     }
 
-    private static func timestamp() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss.SSS"
-        return f.string(from: Date())
+    private static func rotateLog() {
+        guard let data = FileManager.default.contents(atPath: Config.logFile),
+              let content = String(data: data, encoding: .utf8) else { return }
+        let lines = content.components(separatedBy: "\n")
+        let kept = lines.suffix(Config.logKeepLines).joined(separator: "\n")
+        handle?.truncateFile(atOffset: 0)
+        handle?.seek(toFileOffset: 0)
+        if let keptData = kept.data(using: .utf8) {
+            handle?.write(keptData)
+            bytesWritten = keptData.count
+        }
     }
 }
