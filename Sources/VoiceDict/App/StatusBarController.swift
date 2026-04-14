@@ -3,6 +3,7 @@ import Cocoa
 class StatusBarController: NSObject {
 
     private var statusItem: NSStatusItem?
+    private let cursorOverlay = CursorOverlay()
 
     func setup() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -35,6 +36,14 @@ class StatusBarController: NSObject {
         if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "VoiceDict \(state)") {
             image.isTemplate = true
             button.image = image
+        }
+
+        // Floating cursor indicator
+        switch state {
+        case .listening, .processing:
+            cursorOverlay.show(for: state)
+        default:
+            cursorOverlay.hide()
         }
     }
 
