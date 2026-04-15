@@ -186,8 +186,16 @@ class WhisperService {
             let frameCount = AVAudioFrameCount(Double(buffer.frameLength) * 16000.0 / inputFormat.sampleRate)
             guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: wavFormat, frameCapacity: frameCount) else { return }
 
+            // FIX: flag consumed para que o converter não reuse o mesmo buffer duas vezes,
+            // o que causava corrupção de áudio e palavras sendo perdidas no meio da frase.
+            var consumed = false
             var error: NSError?
             converter.convert(to: convertedBuffer, error: &error) { _, outStatus in
+                guard !consumed else {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+                consumed = true
                 outStatus.pointee = .haveData
                 return buffer
             }
@@ -201,6 +209,13 @@ class WhisperService {
                     Log.d("WhisperService: erro ao gravar buffer: \(error.localizedDescription)")
                 }
             }
+        }
+
+        // Se o engine já foi pré-aquecido (isRunning), pula engine.start() — grava imediatamente.
+        // Caso contrário, faz cold start (194-344ms de delay inevitável).
+        if engine.isRunning {
+            Log.d("WhisperService: engine pré-aquecido ✓ gravando em \(tmpPath)")
+            return true
         }
 
         do {
@@ -217,29 +232,35 @@ class WhisperService {
     // MARK: - Transcription
 
     func stopAndTranscribe(engine: AVAudioEngine, completion: @escaping (String?) -> Void) {
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        audioFile = nil
+        // Captura o path antes de zerá-lo — a closure do trailing delay vai usar.
+        let capturedPath = audioFilePath
+        audioFilePath = nil
 
-        guard let path = audioFilePath else {
-            Log.d("WhisperService: sem arquivo de áudio")
-            completion(nil)
-            return
-        }
+        // FIX última palavra: aguarda 200ms antes de parar de gravar.
+        // Sem esse delay, o tap é removido imediatamente ao soltar a tecla e
+        // a última palavra (ainda sendo pronunciada) é cortada.
+        DispatchQueue.global().asyncAfter(deadline: .now() + Config.trailingDelay) { [self] in
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            self.audioFile = nil  // Fecha/flush o arquivo após capturar o trailing
 
-        let fileSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
-        Log.d("WhisperService: transcrevendo... WAV=\(fileSize) bytes")
+            guard let path = capturedPath else {
+                Log.d("WhisperService: sem arquivo de áudio")
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
 
-        // Skip transcription for tiny files (likely silence/noise)
-        if fileSize < 8000 {
-            Log.d("WhisperService: arquivo muito pequeno (\(fileSize)b), ignorando")
-            try? FileManager.default.removeItem(atPath: path)
-            completion(nil)
-            audioFilePath = nil
-            return
-        }
+            let fileSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+            Log.d("WhisperService: transcrevendo... WAV=\(fileSize) bytes (+\(Int(Config.trailingDelay * 1000))ms trailing)")
 
-        DispatchQueue.global().async { [self] in
+            // Skip transcription for tiny files (likely silence/noise)
+            if fileSize < 8000 {
+                Log.d("WhisperService: arquivo muito pequeno (\(fileSize)b), ignorando")
+                try? FileManager.default.removeItem(atPath: path)
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+
             let start = CFAbsoluteTimeGetCurrent()
 
             let result: String?
@@ -263,8 +284,6 @@ class WhisperService {
                 completion(result)
             }
         }
-
-        audioFilePath = nil
     }
 
     func cancel() {

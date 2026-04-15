@@ -7,6 +7,7 @@ enum Config {
     static let clipboardRestoreDelay: TimeInterval = 0.100 // Wait before restoring clipboard
     static let cooldownDuration: TimeInterval = 0.300   // Min gap between dictation sessions
     static let tapReEnableInterval: TimeInterval = 5.0  // Check event tap health
+    static let trailingDelay: TimeInterval = 0.200      // 200ms trailing audio after hotkey release (captures last word)
 
     // Device-specific modifier masks (from IOKit NX_ constants)
     // Hotkey: Left Shift + Left Control
