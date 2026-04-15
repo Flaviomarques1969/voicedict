@@ -81,11 +81,11 @@ class StateMachine {
             guard let self = self else { return }
             let engine = AVAudioEngine()
             do {
+                // Inicia o engine (sem tap) para inicializar a sessão de áudio do sistema.
+                // Nota: NÃO acessa inputNode antes de installTap — pode causar crash ObjC.
                 try engine.start()
-                // Acessa inputNode para forçar inicialização completa do hardware de áudio.
-                _ = engine.inputNode.outputFormat(forBus: 0)
                 self.warmEngine = engine
-                Log.d("AudioEngine pré-aquecido ✓ (hardware inicializado)")
+                Log.d("AudioEngine pré-aquecido ✓")
             } catch {
                 // Falha silenciosa — startRecording() fará cold start normalmente
                 Log.d("AudioEngine pré-aquecimento falhou: \(error) — usará cold start")
