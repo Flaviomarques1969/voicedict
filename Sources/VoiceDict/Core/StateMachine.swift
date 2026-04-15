@@ -77,20 +77,10 @@ class StateMachine {
     /// O dispatch async garante que não bloqueia o caller. O engine.start() é chamado em idle,
     /// eliminando o cold start de 194-344ms quando o usuário ativar a ditação.
     private func prepareWarmEngine() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            let engine = AVAudioEngine()
-            do {
-                // Inicia o engine (sem tap) para inicializar a sessão de áudio do sistema.
-                // Nota: NÃO acessa inputNode antes de installTap — pode causar crash ObjC.
-                try engine.start()
-                self.warmEngine = engine
-                Log.d("AudioEngine pré-aquecido ✓")
-            } catch {
-                // Falha silenciosa — startRecording() fará cold start normalmente
-                Log.d("AudioEngine pré-aquecimento falhou: \(error) — usará cold start")
-            }
-        }
+        // Cria o engine antecipadamente (sem iniciar) para evitar alocação no momento da gravação.
+        // O engine.start() acontece em startRecording() quando o usuário ativa.
+        warmEngine = AVAudioEngine()
+        Log.d("AudioEngine pré-criado")
     }
 
     // MARK: State transitions
@@ -101,40 +91,10 @@ class StateMachine {
         hotkeyMonitor.isActivating = true
         onStateChanged?(.activating)
 
-        activationWork = DispatchWorkItem {}
-        let work = activationWork
-        DispatchQueue.global().async { [weak self] in
-            Thread.sleep(forTimeInterval: Config.activationDelay)
-            guard let work = work, !work.isCancelled else { return }
-            DispatchQueue.main.async {
-                Log.d("⏱ 180ms atingido!")
-                guard let self = self, self.state == .activating else { return }
-                self.transitionToListening()
-            }
-        }
-    }
-
-    private func cancelActivation() {
-        activationWork?.cancel()
-        activationWork = nil
-        hotkeyMonitor.isActivating = false
-        whisperService.cancel()
-        audioEngine?.stop()
-        audioEngine = nil
-        state = .idle
-        onStateChanged?(.idle)
-    }
-
-    private func transitionToListening() {
-        Log.d("→ LISTENING")
-        activationWork = nil
-        hotkeyMonitor.isActivating = false
-        state = .listening
-        onStateChanged?(.listening)
-
-        // Usa engine pré-aquecido (já com hardware inicializado) se disponível.
-        // startRecording() detecta engine.isRunning e pula engine.start() — gravação
-        // começa em <50ms em vez de 194-344ms (cold start).
+        // Inicia gravação IMEDIATAMENTE — engine.start() (~200ms) começa agora,
+        // em paralelo com o activation delay. Quando startRecording() retornar,
+        // o delay já terá passado (ou quase) e a gravação começa sem espera extra.
+        let activationStart = Date()
         let engine = warmEngine ?? AVAudioEngine()
         warmEngine = nil
         audioEngine = engine
@@ -145,7 +105,50 @@ class StateMachine {
             audioEngine = nil
             state = .idle
             onStateChanged?(.idle)
+            prepareWarmEngine()
+            return
         }
+
+        // Desconta o tempo que engine.start() já consumiu do activation delay.
+        // Se engine.start() demorou 200ms e o delay é 80ms, restante = 0 → LISTENING imediato.
+        let elapsed = Date().timeIntervalSince(activationStart)
+        let remainingDelay = max(0, Config.activationDelay - elapsed)
+        Log.d("gravação iniciada (\(Int(elapsed * 1000))ms). restante: \(Int(remainingDelay * 1000))ms")
+
+        activationWork = DispatchWorkItem {}
+        let work = activationWork
+        DispatchQueue.global().async { [weak self] in
+            if remainingDelay > 0 {
+                Thread.sleep(forTimeInterval: remainingDelay)
+            }
+            guard let work = work, !work.isCancelled else { return }
+            DispatchQueue.main.async {
+                guard let self = self, self.state == .activating else { return }
+                self.transitionToListening()
+            }
+        }
+    }
+
+    private func cancelActivation() {
+        activationWork?.cancel()
+        activationWork = nil
+        hotkeyMonitor.isActivating = false
+        // Remove o tap se a gravação foi iniciada durante a ativação
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        whisperService.cancel()
+        audioEngine?.stop()
+        audioEngine = nil
+        state = .idle
+        onStateChanged?(.idle)
+    }
+
+    private func transitionToListening() {
+        Log.d("→ LISTENING (gravação em andamento)")
+        activationWork = nil
+        hotkeyMonitor.isActivating = false
+        state = .listening
+        onStateChanged?(.listening)
+        // Engine e gravação já foram iniciados em transitionToActivating()
     }
 
     private func transitionToProcessing() {

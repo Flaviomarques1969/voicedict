@@ -2,7 +2,7 @@ import Foundation
 
 enum Config {
     // Timing
-    static let activationDelay: TimeInterval = 0.180   // 180ms hold before recording
+    static let activationDelay: TimeInterval = 0.080   // 80ms hold before recording (era 180ms — reduzido para capturar primeira palavra)
     static let processingTimeout: TimeInterval = 5.0    // Safety timeout for STT
     static let clipboardRestoreDelay: TimeInterval = 0.100 // Wait before restoring clipboard
     static let cooldownDuration: TimeInterval = 0.300   // Min gap between dictation sessions

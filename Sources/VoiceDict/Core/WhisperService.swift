@@ -211,13 +211,6 @@ class WhisperService {
             }
         }
 
-        // Se o engine já foi pré-aquecido (isRunning), pula engine.start() — grava imediatamente.
-        // Caso contrário, faz cold start (194-344ms de delay inevitável).
-        if engine.isRunning {
-            Log.d("WhisperService: engine pré-aquecido ✓ gravando em \(tmpPath)")
-            return true
-        }
-
         do {
             try engine.start()
             Log.d("WhisperService: gravando em \(tmpPath)")
