@@ -35,7 +35,7 @@ class TextInserter {
 
         // Beep + print — lightweight notification without UNUserNotificationCenter
         NSSound.beep()
-        print("[VoiceDict] Texto copiado para clipboard (cole com Cmd+V): \(text.prefix(80))")
+        print("[Ditado] Texto copiado para clipboard (cole com Cmd+V): \(text.prefix(80))")
     }
 
     // MARK: - Clipboard save/restore

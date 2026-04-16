@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-APP_NAME="VoiceDict"
+APP_NAME="Ditado"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 
 echo "=== Building $APP_NAME ==="
@@ -38,9 +38,3 @@ echo "=== Build completo ==="
 echo "App: $APP_BUNDLE"
 echo ""
 echo "Para executar:  open $APP_BUNDLE"
-echo ""
-echo "Para instalar SEM resetar permissão de Acessibilidade:"
-echo "  cp \"\$APP_BUNDLE/Contents/MacOS/$APP_NAME\" \"/Applications/$APP_NAME.app/Contents/MacOS/$APP_NAME\" && codesign --force --sign - \"/Applications/$APP_NAME.app\""
-echo ""
-echo "Para instalar pela primeira vez (reseta permissão):"
-echo "  cp -r $APP_BUNDLE /Applications/"

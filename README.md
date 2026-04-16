@@ -1,4 +1,4 @@
-# VoiceDict
+# Ditado
 
 Ditado por voz para macOS com Whisper (offline, gratuito).
 
@@ -14,8 +14,6 @@ Segure **Left Shift + Left Control** para ditar. O texto é inserido onde o curs
 ## Instalação
 
 ```bash
-git clone https://github.com/Flaviomarques1969/voicedict.git
-cd voicedict
 chmod +x Scripts/install.sh
 ./Scripts/install.sh
 ```

@@ -10,7 +10,7 @@ class StatusBarController: NSObject {
         updateIcon(for: .idle)
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "VoiceDict v1.0", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Ditado v1.0", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Idioma: pt-BR", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Hotkey: Left Shift + Left Control", action: nil, keyEquivalent: ""))

@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "VoiceDict",
+    name: "Ditado",
     platforms: [.macOS(.v15)],
     targets: [
         .executableTarget(
-            name: "VoiceDict",
-            path: "Sources/VoiceDict",
+            name: "Ditado",
+            path: "Sources/Ditado",
             swiftSettings: [
                 .swiftLanguageMode(.v5)
             ],

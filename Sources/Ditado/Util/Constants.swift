@@ -20,7 +20,7 @@ enum Config {
     static let speechLocale = Locale(identifier: "pt-BR")
 
     // Log
-    static let logFile = "/tmp/voicedict.log"
+    static let logFile = "/tmp/ditado.log"
     static let logMaxSize = 512 * 1024 // 512KB — rotate if exceeded
     static let logKeepLines = 500      // Keep last N lines on rotation
 }
@@ -40,21 +40,24 @@ enum Log {
         return f
     }()
 
+    // NSLock garante que writes de múltiplas threads (main, global, timer) não colidam
+    private static let writeLock = NSLock()
     private static var bytesWritten = 0
 
     static func d(_ msg: String) {
-        let line = "[VoiceDict \(formatter.string(from: Date()))] \(msg)\n"
-        if let data = line.data(using: .utf8) {
-            handle?.seekToEndOfFile()
-            handle?.write(data)
-            bytesWritten += data.count
+        let line = "[Ditado \(formatter.string(from: Date()))] \(msg)\n"
+        NSLog("[Ditado] %@", msg)
+        guard let data = line.data(using: .utf8) else { return }
+        writeLock.lock()
+        defer { writeLock.unlock() }
+        handle?.seekToEndOfFile()
+        handle?.write(data)
+        bytesWritten += data.count
 
-            // Rotate if log exceeds max size
-            if bytesWritten > Config.logMaxSize {
-                rotateLog()
-            }
+        // Rotate if log exceeds max size
+        if bytesWritten > Config.logMaxSize {
+            rotateLog()
         }
-        NSLog("[VoiceDict] %@", msg)
     }
 
     private static func rotateLog() {

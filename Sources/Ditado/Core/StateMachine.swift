@@ -20,8 +20,6 @@ class StateMachine {
     private let textInserter = TextInserter()
     let hotkeyMonitor = HotkeyMonitor()
 
-    private var audioEngine: AVAudioEngine?
-    private var warmEngine: AVAudioEngine? // Pre-created engine for fast start
     private var activationWork: DispatchWorkItem?
     private var lastProcessingEndTime: Date = .distantPast
 
@@ -30,21 +28,24 @@ class StateMachine {
     func start() {
         whisperService.startServer()
 
+        // Inicia engine persistente na main thread.
+        // Bloqueia 200-2000ms para inicializar hardware de áudio — feito uma vez só no startup.
+        // A partir daí, todas as ditações usam swap de tap (instantâneo, sem cold start).
+        whisperService.startEngine()
+
         hotkeyMonitor.onEvent = { [weak self] event in
             self?.handleHotkeyEvent(event)
         }
         hotkeyMonitor.start()
 
-        // Pre-aquece engine em background: chama engine.start() para inicializar
-        // o hardware de áudio antes do usuário precisar gravar. Quando startRecording()
-        // for chamado, engine.isRunning == true e pula o engine.start() (194-344ms).
-        prepareWarmEngine()
+        Log.d("StateMachine iniciada (Whisper). Segure L-Shift + L-Control para ditar.")
     }
 
     func stop() {
         hotkeyMonitor.stop()
-        cancelActivation()
+        whisperService.cancel()
         whisperService.stopServer()
+        whisperService.stopEngine()
     }
 
     // MARK: Event handling
@@ -71,18 +72,6 @@ class StateMachine {
         }
     }
 
-    // MARK: Engine pre-warming
-
-    /// Cria e pré-inicia o AVAudioEngine na main thread (AVAudioEngine não é thread-safe).
-    /// O dispatch async garante que não bloqueia o caller. O engine.start() é chamado em idle,
-    /// eliminando o cold start de 194-344ms quando o usuário ativar a ditação.
-    private func prepareWarmEngine() {
-        // Cria o engine antecipadamente (sem iniciar) para evitar alocação no momento da gravação.
-        // O engine.start() acontece em startRecording() quando o usuário ativa.
-        warmEngine = AVAudioEngine()
-        Log.d("AudioEngine pré-criado")
-    }
-
     // MARK: State transitions
 
     private func transitionToActivating() {
@@ -91,30 +80,22 @@ class StateMachine {
         hotkeyMonitor.isActivating = true
         onStateChanged?(.activating)
 
-        // Inicia gravação IMEDIATAMENTE — engine.start() (~200ms) começa agora,
-        // em paralelo com o activation delay. Quando startRecording() retornar,
-        // o delay já terá passado (ou quase) e a gravação começa sem espera extra.
+        // Inicia gravação IMEDIATAMENTE via swap de tap (instantâneo — engine já está rodando).
+        // A primeira palavra é capturada desde o keypress, sem cold start.
         let activationStart = Date()
-        let engine = warmEngine ?? AVAudioEngine()
-        warmEngine = nil
-        audioEngine = engine
-
-        let started = whisperService.startRecording(engine: engine)
+        let started = whisperService.startRecording()
         if !started {
             Log.d("Áudio falhou — voltando a idle")
-            audioEngine = nil
             state = .idle
             onStateChanged?(.idle)
-            prepareWarmEngine()
             return
         }
 
-        // Desconta o tempo que engine.start() já consumiu do activation delay.
-        // Se engine.start() demorou 200ms e o delay é 80ms, restante = 0 → LISTENING imediato.
         let elapsed = Date().timeIntervalSince(activationStart)
-        let remainingDelay = max(0, Config.activationDelay - elapsed)
-        Log.d("gravação iniciada (\(Int(elapsed * 1000))ms). restante: \(Int(remainingDelay * 1000))ms")
+        Log.d("gravação iniciada em \(Int(elapsed * 1000))ms")
 
+        // Desconta do activation delay o tempo já decorrido em startRecording()
+        let remainingDelay = max(0, Config.activationDelay - elapsed)
         activationWork = DispatchWorkItem {}
         let work = activationWork
         DispatchQueue.global().async { [weak self] in
@@ -133,11 +114,7 @@ class StateMachine {
         activationWork?.cancel()
         activationWork = nil
         hotkeyMonitor.isActivating = false
-        // Remove o tap se a gravação foi iniciada durante a ativação
-        audioEngine?.inputNode.removeTap(onBus: 0)
-        whisperService.cancel()
-        audioEngine?.stop()
-        audioEngine = nil
+        whisperService.cancel()  // Remove tap de gravação e reinstala tap silencioso
         state = .idle
         onStateChanged?(.idle)
     }
@@ -148,7 +125,7 @@ class StateMachine {
         hotkeyMonitor.isActivating = false
         state = .listening
         onStateChanged?(.listening)
-        // Engine e gravação já foram iniciados em transitionToActivating()
+        // Engine e gravação já ativos desde transitionToActivating()
     }
 
     private func transitionToProcessing() {
@@ -156,16 +133,9 @@ class StateMachine {
         state = .processing
         onStateChanged?(.processing)
 
-        guard let engine = audioEngine else {
-            state = .idle
-            onStateChanged?(.idle)
-            return
-        }
-
-        whisperService.stopAndTranscribe(engine: engine) { [weak self] text in
+        whisperService.stopAndTranscribe { [weak self] text in
             guard let self = self, self.state == .processing else { return }
             self.lastProcessingEndTime = Date()
-            self.audioEngine = nil
 
             if let text = text, !text.isEmpty {
                 Log.d("Whisper resultado: '\(text)'")
@@ -176,11 +146,6 @@ class StateMachine {
 
             self.state = .idle
             self.onStateChanged?(.idle)
-
-            // Pré-aquece engine para a próxima gravação (background).
-            // Mantém hardware de áudio inicializado para que a próxima
-            // gravação comece imediatamente sem cold start.
-            self.prepareWarmEngine()
         }
     }
 }

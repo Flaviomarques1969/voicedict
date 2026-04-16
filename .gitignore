@@ -1,5 +1,4 @@
 .build/
-VoiceDict.app/
+Ditado.app/
 vendor/
 *.log
-VoiceDict 2.app/

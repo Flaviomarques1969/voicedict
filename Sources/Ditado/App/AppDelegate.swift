@@ -16,7 +16,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.requestAccessibility()
             let alert = NSAlert()
             alert.messageText = "Permissão de Acessibilidade necessária"
-            alert.informativeText = "Habilite VoiceDict em Configurações → Privacidade → Acessibilidade."
+            alert.informativeText = "Habilite Ditado em Configurações → Privacidade → Acessibilidade."
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
@@ -37,7 +37,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.statusBarController?.updateIcon(for: state)
         }
         stateMachine?.start()
-        Log.d("StateMachine iniciada (Whisper). Segure L-Shift + L-Control para ditar.")
     }
 
     func applicationWillTerminate(_ notification: Notification) {

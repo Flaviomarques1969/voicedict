@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.user.voicedict</string>
+    <string>com.user.ditado</string>
     <key>CFBundleName</key>
-    <string>VoiceDict</string>
+    <string>Ditado</string>
     <key>CFBundleDisplayName</key>
-    <string>VoiceDict</string>
+    <string>Ditado</string>
     <key>CFBundleExecutable</key>
-    <string>VoiceDict</string>
+    <string>Ditado</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
@@ -21,6 +21,6 @@
     <key>LSUIElement</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>VoiceDict precisa do microfone para capturar sua voz durante o ditado.</string>
+    <string>Ditado precisa do microfone para capturar sua voz durante o ditado.</string>
 </dict>
 </plist>

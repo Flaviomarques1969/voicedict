@@ -2,7 +2,7 @@
 set -euo pipefail
 
 echo "╔══════════════════════════════════════════════╗"
-echo "║         VoiceDict — Instalador               ║"
+echo "║         Ditado — Instalador                   ║"
 echo "║   Ditado por voz com Whisper (offline)        ║"
 echo "╚══════════════════════════════════════════════╝"
 echo ""
@@ -64,7 +64,7 @@ else
 fi
 
 # 4. Install whisper binary and model to Application Support
-SUPPORT_DIR="$HOME/Library/Application Support/VoiceDict"
+SUPPORT_DIR="$HOME/Library/Application Support/Ditado"
 echo ""
 echo "▸ Instalando whisper em $SUPPORT_DIR..."
 mkdir -p "$SUPPORT_DIR/bin"
@@ -81,21 +81,14 @@ else
     echo "  ✓ Modelo já instalado"
 fi
 
-# 5. Build VoiceDict
+# 5. Build Ditado
 echo ""
-echo "▸ Compilando VoiceDict..."
+echo "▸ Compilando Ditado..."
 swift build -c release 2>&1 | tail -2
 
 # 6. Create .app bundle
-echo "▸ Montando VoiceDict.app..."
+echo "▸ Montando Ditado.app..."
 bash Scripts/build.sh 2>&1 | tail -2
-
-# 7. Install to /Applications
-echo ""
-echo "▸ Instalando em /Applications..."
-rm -rf /Applications/VoiceDict.app
-cp -r VoiceDict.app /Applications/VoiceDict.app
-codesign --force --sign - /Applications/VoiceDict.app
 
 echo ""
 echo "╔══════════════════════════════════════════════╗"
@@ -103,11 +96,11 @@ echo "║         ✓ Instalação completa!               ║"
 echo "╠══════════════════════════════════════════════╣"
 echo "║                                              ║"
 echo "║  Para usar:                                  ║"
-echo "║  1. Abra /Applications/VoiceDict.app         ║"
+echo "║  1. Abra Ditado.app                          ║"
 echo "║  2. Habilite em Acessibilidade (Settings)    ║"
 echo "║  3. Segure L-Shift + L-Control para ditar    ║"
 echo "║                                              ║"
 echo "╚══════════════════════════════════════════════╝"
 echo ""
-echo "Abrindo VoiceDict..."
-open /Applications/VoiceDict.app
+echo "Abrindo Ditado..."
+open "$PROJECT_DIR/Ditado.app"
