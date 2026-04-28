@@ -4,6 +4,7 @@ class StatusBarController: NSObject {
 
     private var statusItem: NSStatusItem?
     private let cursorOverlay = CursorOverlay()
+    private var lastTranscription: String = ""
 
     func setup() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -15,11 +16,28 @@ class StatusBarController: NSObject {
         menu.addItem(NSMenuItem(title: "Idioma: pt-BR", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Hotkey: Left Shift + Left Control", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
+        let correctItem = NSMenuItem(
+            title: "Corrigir última transcrição…",
+            action: #selector(openCorrections),
+            keyEquivalent: "c"
+        )
+        correctItem.keyEquivalentModifierMask = [.command, .shift]
+        correctItem.target = self
+        menu.addItem(correctItem)
+        menu.addItem(NSMenuItem.separator())
         let quitItem = NSMenuItem(title: "Sair", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
         statusItem?.menu = menu
+    }
+
+    func setLastTranscription(_ text: String) {
+        lastTranscription = text
+    }
+
+    @objc private func openCorrections() {
+        CorrectionsWindow.shared.show(lastTranscription: lastTranscription)
     }
 
     func updateIcon(for state: DictationState) {

@@ -36,6 +36,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stateMachine?.onStateChanged = { [weak self] state in
             self?.statusBarController?.updateIcon(for: state)
         }
+        stateMachine?.onTranscription = { [weak self] text in
+            self?.statusBarController?.setLastTranscription(text)
+        }
         stateMachine?.start()
     }
 

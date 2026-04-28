@@ -15,6 +15,8 @@ class StateMachine {
 
     private(set) var state: DictationState = .idle
     var onStateChanged: ((DictationState) -> Void)?
+    /// Texto final inserido (já com correções aplicadas). Usado pela CorrectionsWindow.
+    var onTranscription: ((String) -> Void)?
 
     private let whisperService = WhisperService()
     private let textInserter = TextInserter()
@@ -138,8 +140,14 @@ class StateMachine {
             self.lastProcessingEndTime = Date()
 
             if let text = text, !text.isEmpty {
-                Log.d("Whisper resultado: '\(text)'")
-                self.textInserter.insert(text)
+                let corrected = CorrectionsStore.shared.apply(text)
+                if corrected != text {
+                    Log.d("Whisper resultado: '\(text)' → corrigido: '\(corrected)'")
+                } else {
+                    Log.d("Whisper resultado: '\(text)'")
+                }
+                self.onTranscription?(corrected)
+                self.textInserter.insert(corrected)
             } else {
                 Log.d("Whisper: sem texto detectado")
             }
