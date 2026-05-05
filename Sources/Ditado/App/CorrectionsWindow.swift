@@ -1,16 +1,17 @@
 import Cocoa
 
-/// Janela de correção: mostra a última transcrição com cada palavra clicável.
-/// Clicar abre prompt para informar a forma correta — gera regra persistente
-/// em CorrectionsStore que será aplicada a todas as transcrições futuras.
-final class CorrectionsWindow: NSObject, NSTextViewDelegate, NSWindowDelegate {
+/// Janela de correção: mostra a última transcrição com texto selecionável.
+/// Usuário seleciona uma ou várias palavras (arraste, duplo-clique, triplo-clique)
+/// e clica em "Corrigir seleção…" para informar a forma correta — gera regra
+/// persistente em CorrectionsStore aplicada a todas as transcrições futuras.
+final class CorrectionsWindow: NSObject, NSWindowDelegate {
 
     static let shared = CorrectionsWindow()
 
     private var window: NSWindow?
     private var transcriptView: NSTextView?
     private var rulesStack: NSStackView?
-    private var emptyTranscriptLabel: NSTextField?
+    private var correctButton: NSButton?
     private var lastTranscription: String = ""
 
     func show(lastTranscription: String) {
@@ -26,7 +27,7 @@ final class CorrectionsWindow: NSObject, NSTextViewDelegate, NSWindowDelegate {
 
     private func build() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 440),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 460),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -40,20 +41,14 @@ final class CorrectionsWindow: NSObject, NSTextViewDelegate, NSWindowDelegate {
         win.contentView = content
 
         let title1 = makeHeading("Última transcrição")
-        let hint1 = makeHint("Clique em uma palavra para ensinar ao Ditado a forma correta.")
+        let hint1 = makeHint("Selecione o trecho errado (uma ou várias palavras) e clique em \"Corrigir seleção…\". Duplo-clique seleciona uma palavra; arraste para selecionar mais.")
 
         let tv = NSTextView()
         tv.isEditable = false
         tv.isSelectable = true
         tv.drawsBackground = true
         tv.backgroundColor = .textBackgroundColor
-        tv.delegate = self
         tv.textContainerInset = NSSize(width: 6, height: 6)
-        tv.linkTextAttributes = [
-            .foregroundColor: NSColor.controlAccentColor,
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-            .cursor: NSCursor.pointingHand,
-        ]
         tv.minSize = NSSize(width: 0, height: 0)
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         tv.isVerticallyResizable = true
@@ -68,8 +63,12 @@ final class CorrectionsWindow: NSObject, NSTextViewDelegate, NSWindowDelegate {
         scroll.borderType = .lineBorder
         scroll.drawsBackground = true
 
+        let correct = NSButton(title: "Corrigir seleção…", target: self, action: #selector(correctSelection))
+        correct.bezelStyle = .rounded
+        correct.keyEquivalent = "\r"
+
         let title2 = makeHeading("Regras de correção")
-        let hint2 = makeHint("Cada regra substitui a palavra escrita pelo Whisper pela forma correta — sempre.")
+        let hint2 = makeHint("Cada regra substitui a forma escrita pelo Whisper pela correta — sempre. Acentos e caixa não importam para casar.")
 
         let rules = NSStackView()
         rules.orientation = .vertical
@@ -93,7 +92,7 @@ final class CorrectionsWindow: NSObject, NSTextViewDelegate, NSWindowDelegate {
         ])
         rulesScroll.documentView = rulesContainer
 
-        for v in [title1, hint1, scroll, title2, hint2, rulesScroll] {
+        for v in [title1, hint1, scroll, correct, title2, hint2, rulesScroll] {
             v.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(v)
         }
@@ -112,7 +111,10 @@ final class CorrectionsWindow: NSObject, NSTextViewDelegate, NSWindowDelegate {
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
             scroll.heightAnchor.constraint(equalToConstant: 90),
 
-            title2.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 16),
+            correct.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 8),
+            correct.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
+
+            title2.topAnchor.constraint(equalTo: correct.bottomAnchor, constant: 16),
             title2.leadingAnchor.constraint(equalTo: title1.leadingAnchor),
 
             hint2.topAnchor.constraint(equalTo: title2.bottomAnchor, constant: 2),
@@ -130,6 +132,7 @@ final class CorrectionsWindow: NSObject, NSTextViewDelegate, NSWindowDelegate {
         window = win
         transcriptView = tv
         rulesStack = rules
+        correctButton = correct
     }
 
     private func makeHeading(_ s: String) -> NSTextField {
@@ -163,19 +166,10 @@ final class CorrectionsWindow: NSObject, NSTextViewDelegate, NSWindowDelegate {
             return
         }
 
-        let attr = NSMutableAttributedString(string: text)
-        let full = NSRange(location: 0, length: (text as NSString).length)
-        attr.addAttribute(.foregroundColor, value: NSColor.labelColor, range: full)
-        attr.addAttribute(.font, value: NSFont.systemFont(ofSize: 14), range: full)
-
-        if let regex = try? NSRegularExpression(pattern: "[\\p{L}\\p{N}']+") {
-            regex.enumerateMatches(in: text, range: full) { match, _, _ in
-                guard let r = match?.range else { return }
-                let word = (text as NSString).substring(with: r)
-                guard let url = Self.linkURL(for: word) else { return }
-                attr.addAttribute(.link, value: url, range: r)
-            }
-        }
+        let attr = NSAttributedString(string: text, attributes: [
+            .foregroundColor: NSColor.labelColor,
+            .font: NSFont.systemFont(ofSize: 14),
+        ])
         storage?.setAttributedString(attr)
     }
 
@@ -225,41 +219,44 @@ final class CorrectionsWindow: NSObject, NSTextViewDelegate, NSWindowDelegate {
         renderRules()
     }
 
-    // MARK: - Click on word
+    // MARK: - Correct selection
 
-    private static let linkScheme = "ditado-correct"
-
-    private static func linkURL(for word: String) -> URL? {
-        var c = URLComponents()
-        c.scheme = linkScheme
-        c.host = "word"
-        c.queryItems = [URLQueryItem(name: "w", value: word)]
-        return c.url
-    }
-
-    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-        let url: URL?
-        if let u = link as? URL { url = u }
-        else if let s = link as? String { url = URL(string: s) }
-        else { url = nil }
-        guard let u = url, u.scheme == Self.linkScheme,
-              let comps = URLComponents(url: u, resolvingAgainstBaseURL: false),
-              let word = comps.queryItems?.first(where: { $0.name == "w" })?.value else {
-            return true
+    @objc private func correctSelection() {
+        guard let tv = transcriptView else { return }
+        let selected = tv.selectedRange()
+        let nsText = tv.string as NSString
+        guard selected.length > 0, selected.location + selected.length <= nsText.length else {
+            warn("Selecione o trecho errado na transcrição (uma ou várias palavras) antes de corrigir.")
+            return
         }
-        promptCorrection(for: word)
-        return true
+
+        let raw = nsText.substring(with: selected)
+        let fragment = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !fragment.isEmpty else {
+            warn("Seleção vazia — selecione o texto a corrigir.")
+            return
+        }
+
+        promptCorrection(for: fragment)
     }
 
-    private func promptCorrection(for word: String) {
+    private func warn(_ msg: String) {
+        let a = NSAlert()
+        a.messageText = "Atenção"
+        a.informativeText = msg
+        a.addButton(withTitle: "OK")
+        a.runModal()
+    }
+
+    private func promptCorrection(for fragment: String) {
         let alert = NSAlert()
-        alert.messageText = "Corrigir “\(word)”"
-        alert.informativeText = "O Whisper escreveu “\(word)”. Qual é a palavra correta?\n\nA partir de agora, sempre que o Whisper escrever “\(word)”, será substituído automaticamente."
+        alert.messageText = "Corrigir “\(fragment)”"
+        alert.informativeText = "O Whisper escreveu “\(fragment)”. Qual é a forma correta?\n\nA partir de agora, sempre que o Whisper escrever “\(fragment)” (ignorando acentos e maiúsculas), será substituído automaticamente."
         alert.addButton(withTitle: "Salvar")
         alert.addButton(withTitle: "Cancelar")
 
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
-        field.placeholderString = "palavra correta"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.placeholderString = "forma correta"
         field.stringValue = ""
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
@@ -267,9 +264,9 @@ final class CorrectionsWindow: NSObject, NSTextViewDelegate, NSWindowDelegate {
         let response = alert.runModal()
         guard response == .alertFirstButtonReturn else { return }
         let to = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !to.isEmpty, to.lowercased() != word.lowercased() else { return }
+        guard !to.isEmpty else { return }
 
-        CorrectionsStore.shared.add(from: word, to: to)
+        CorrectionsStore.shared.add(from: fragment, to: to)
         // Aplica de volta na transcrição mostrada para feedback imediato
         lastTranscription = CorrectionsStore.shared.apply(lastTranscription)
         renderTranscription()

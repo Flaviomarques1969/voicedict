@@ -7,7 +7,8 @@ struct CorrectionRule: Codable {
 }
 
 /// Persistente em ~/Library/Application Support/Ditado/corrections.json.
-/// Aplica substituição word-boundary case-insensitive preservando o caso da ocorrência.
+/// Aplica substituição word-boundary, case-insensitive, accent-insensitive,
+/// preservando o caso da ocorrência. Suporta `from` com várias palavras.
 final class CorrectionsStore {
 
     static let shared = CorrectionsStore()
@@ -46,25 +47,53 @@ final class CorrectionsStore {
     // MARK: - Mutations
 
     func add(from rawFrom: String, to rawTo: String) {
-        let f = rawFrom.trimmingCharacters(in: .whitespacesAndNewlines)
-        let t = rawTo.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !f.isEmpty, !t.isEmpty, f.lowercased() != t.lowercased() else { return }
+        let f = normalizeWhitespace(rawFrom)
+        let t = normalizeWhitespace(rawTo)
+        guard !f.isEmpty, !t.isEmpty,
+              foldKey(f) != foldKey(t) else { return }
         lock.lock(); defer { lock.unlock() }
-        rules.removeAll { $0.from.lowercased() == f.lowercased() }
+        rules.removeAll { foldKey($0.from) == foldKey(f) }
         rules.append(CorrectionRule(from: f, to: t, createdAt: Date()))
         save()
     }
 
     func remove(from rawFrom: String) {
+        let f = normalizeWhitespace(rawFrom)
         lock.lock(); defer { lock.unlock() }
-        rules.removeAll { $0.from.lowercased() == rawFrom.lowercased() }
+        rules.removeAll { foldKey($0.from) == foldKey(f) }
         save()
+    }
+
+    /// Vocabulário a ser passado como `initial_prompt` ao Whisper.
+    /// Lista os destinos das regras (palavras corretas) — biases o modelo
+    /// a transcrever essas palavras direto, em vez de inventar variações.
+    /// Truncado em ~200 chars para não estourar o limite de tokens.
+    func whisperPromptHint() -> String {
+        lock.lock()
+        let snapshot = rules
+        lock.unlock()
+
+        var seen = Set<String>()
+        var words: [String] = []
+        for r in snapshot {
+            let key = r.to.lowercased()
+            if seen.insert(key).inserted { words.append(r.to) }
+        }
+        guard !words.isEmpty else { return "" }
+
+        var out = ""
+        for w in words {
+            let next = out.isEmpty ? w : out + ", " + w
+            if next.count > 200 { break }
+            out = next
+        }
+        return out
     }
 
     // MARK: - Application
 
     /// Aplica todas as regras ao texto. Word-boundary, case-insensitive,
-    /// preserva caso da ocorrência (UPPER, Title, lower).
+    /// accent-insensitive, preserva caso da ocorrência (UPPER, Title, lower).
     func apply(_ text: String) -> String {
         lock.lock()
         let snapshot = rules
@@ -79,33 +108,60 @@ final class CorrectionsStore {
     }
 
     private func applyRule(_ rule: CorrectionRule, to text: String) -> String {
-        let escaped = NSRegularExpression.escapedPattern(for: rule.from)
-        // \b funciona razoavelmente para PT — palavras com acentos são tratadas como letra pelo NSRegex em modo Unicode.
-        let pattern = "(?<![\\p{L}\\p{N}_])\(escaped)(?![\\p{L}\\p{N}_])"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return text
-        }
-        let ns = text as NSString
-        let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
-        guard !matches.isEmpty else { return text }
+        let foldedFrom = foldKey(rule.from)
+        guard !foldedFrom.isEmpty else { return text }
 
-        let mutable = NSMutableString(string: text)
-        for match in matches.reversed() {
-            let matched = ns.substring(with: match.range)
-            let replacement = preserveCase(target: rule.to, sample: matched)
-            mutable.replaceCharacters(in: match.range, with: replacement)
+        var result = text
+        var searchStart = result.startIndex
+        let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+
+        while searchStart < result.endIndex,
+              let range = result.range(of: rule.from, options: options, range: searchStart..<result.endIndex) {
+            let prevOK = range.lowerBound == result.startIndex
+                || !isWordChar(result[result.index(before: range.lowerBound)])
+            let nextOK = range.upperBound == result.endIndex
+                || !isWordChar(result[range.upperBound])
+
+            if prevOK && nextOK {
+                let matched = String(result[range])
+                let replacement = preserveCase(target: rule.to, sample: matched)
+                result.replaceSubrange(range, with: replacement)
+                if let advanced = result.index(range.lowerBound, offsetBy: replacement.count, limitedBy: result.endIndex) {
+                    searchStart = advanced
+                } else {
+                    break
+                }
+            } else {
+                searchStart = result.index(after: range.lowerBound)
+            }
         }
-        return mutable as String
+        return result
+    }
+
+    private func isWordChar(_ c: Character) -> Bool {
+        return c.isLetter || c.isNumber || c == "_"
     }
 
     private func preserveCase(target: String, sample: String) -> String {
-        guard !sample.isEmpty else { return target }
-        if sample.count > 1 && sample == sample.uppercased() {
+        // Para amostras multi-palavra, considera só a primeira letra "alfabética".
+        guard let firstLetter = sample.first(where: { $0.isLetter }) else { return target }
+        let lettersOnly = sample.filter { $0.isLetter }
+        if lettersOnly.count > 1 && lettersOnly == lettersOnly.uppercased() {
             return target.uppercased()
         }
-        if let first = sample.first, first.isUppercase {
+        if firstLetter.isUppercase {
             return target.prefix(1).uppercased() + target.dropFirst()
         }
         return target
+    }
+
+    private func normalizeWhitespace(_ s: String) -> String {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    }
+
+    private func foldKey(_ s: String) -> String {
+        return normalizeWhitespace(s)
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
     }
 }

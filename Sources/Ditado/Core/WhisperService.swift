@@ -78,12 +78,20 @@ class WhisperService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: serverBin)
         let nThreads = ProcessInfo.processInfo.activeProcessorCount
+        // Decoding args — NÃO MEXER sem ler antes:
+        // --beam-size 1 + --best-of 1 forçam greedy decoding. Defaults do whisper.cpp
+        // (beam=5, best-of=5) levam o medium em M2 Pro de ~600ms para 7-13s por frase
+        // de ditado, o que torna o app inutilizável. A diferença de qualidade em PT-BR
+        // para frases curtas é praticamente nula. Se for mexer, medir antes/depois com
+        // a mesma frase e o log mostrando "WhisperService: resultado (Xms)".
         process.arguments = [
             "-m", modelPath,
             "-l", "pt",
             "--no-timestamps",
             "-t", "\(nThreads)",
             "--flash-attn",
+            "--beam-size", "1",
+            "--best-of", "1",
             "--port", "\(serverPort)",
             "--host", "127.0.0.1",
         ]
