@@ -49,11 +49,11 @@ class WhisperService {
         serverBin = appSupport.appendingPathComponent("bin/whisper-server").path
         cliBin = appSupport.appendingPathComponent("bin/whisper-cli").path
 
-        // Prefer small model (fast) — fallback to medium
+        // Prefer medium model (mais preciso em PT) — fallback to small se medium nao existir
         let modelsDir = appSupport.appendingPathComponent("models")
         let small = modelsDir.appendingPathComponent("ggml-small.bin").path
         let medium = modelsDir.appendingPathComponent("ggml-medium.bin").path
-        modelPath = FileManager.default.fileExists(atPath: small) ? small : medium
+        modelPath = FileManager.default.fileExists(atPath: medium) ? medium : small
 
         let modelName = (modelPath as NSString).lastPathComponent
         let hasServer = FileManager.default.fileExists(atPath: serverBin)
@@ -390,6 +390,44 @@ class WhisperService {
         reinstallSilentTap()
     }
 
+    /// Recuperação de emergência: derruba o engine atual e cria um novo do zero.
+    /// Usado pelo watchdog do StateMachine quando detecta travamento — limpa qualquer
+    /// estado interno corrompido do AVAudioEngine após config change ou tap pendurado.
+    /// DEVE ser chamado na main thread.
+    func rebuildEngine() {
+        Log.d("WhisperService: rebuildEngine — derrubando engine atual")
+
+        // Cancela observer/timer antes para não dispararem durante o teardown
+        engineHealthTimer?.invalidate()
+        engineHealthTimer = nil
+        if let obs = engineConfigObserver {
+            NotificationCenter.default.removeObserver(obs)
+            engineConfigObserver = nil
+        }
+
+        // Limpa estado de gravação em andamento
+        audioFile = nil
+        if let path = audioFilePath {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        audioFilePath = nil
+
+        // Derruba o engine — operações podem lançar NSException internamente,
+        // por isso fazemos best-effort: se falhar, descartamos a referência.
+        if let eng = engine {
+            if hasTap {
+                eng.inputNode.removeTap(onBus: 0)
+            }
+            eng.stop()
+        }
+        hasTap = false
+        engine = nil
+        persistentInputFormat = nil
+
+        // Recria do zero (mesma rotina do startup)
+        startEngine()
+    }
+
     private func reinstallSilentTap() {
         guard let eng = engine, let format = persistentInputFormat, !hasTap else { return }
 
@@ -473,6 +511,14 @@ class WhisperService {
         body.append("Content-Disposition: form-data; name=\"language\"\r\n\r\n".data(using: .utf8)!)
         body.append("pt\r\n".data(using: .utf8)!)
 
+        let promptHint = CorrectionsStore.shared.whisperPromptHint()
+        if !promptHint.isEmpty {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"prompt\"\r\n\r\n".data(using: .utf8)!)
+            body.append(promptHint.data(using: .utf8)!)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
 
         var request = URLRequest(url: url)
@@ -512,9 +558,9 @@ class WhisperService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: cliBin)
         let nThreads = ProcessInfo.processInfo.activeProcessorCount
-        // Decoding args greedy — espelha o que está no servidor (linhas ~81-96).
+        // Decoding args greedy — espelha o que está no servidor (linhas ~81-93).
         // beam=1 + best-of=1 mantém latência aceitável também no fallback CLI.
-        process.arguments = [
+        var args = [
             "-m", modelPath,
             "-f", audioPath,
             "-l", "pt",
@@ -525,6 +571,12 @@ class WhisperService {
             "--flash-attn",
             "--no-prints",
         ]
+        let promptHint = CorrectionsStore.shared.whisperPromptHint()
+        if !promptHint.isEmpty {
+            args.append("--prompt")
+            args.append(promptHint)
+        }
+        process.arguments = args
 
         process.environment = ProcessInfo.processInfo.environment
         process.environment?["GGML_METAL_LOG_LEVEL"] = "0"
