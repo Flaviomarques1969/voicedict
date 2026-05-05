@@ -512,6 +512,8 @@ class WhisperService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: cliBin)
         let nThreads = ProcessInfo.processInfo.activeProcessorCount
+        // Decoding args greedy — espelha o que está no servidor (linhas ~81-96).
+        // beam=1 + best-of=1 mantém latência aceitável também no fallback CLI.
         process.arguments = [
             "-m", modelPath,
             "-f", audioPath,
@@ -519,6 +521,7 @@ class WhisperService {
             "--no-timestamps",
             "-t", "\(nThreads)",
             "--beam-size", "1",
+            "--best-of", "1",
             "--flash-attn",
             "--no-prints",
         ]
