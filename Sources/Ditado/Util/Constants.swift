@@ -4,8 +4,13 @@ enum Config {
     // Timing
     static let activationDelay: TimeInterval = 0.080   // 80ms hold before recording (era 180ms — reduzido para capturar primeira palavra)
     static let processingTimeout: TimeInterval = 5.0    // Safety timeout for STT
-    static let clipboardRestoreDelay: TimeInterval = 0.100 // Wait before restoring clipboard
-    static let cooldownDuration: TimeInterval = 0.300   // Min gap between dictation sessions
+    // 600ms: dá folga pro app de destino processar o Cmd+V antes de a gente restaurar
+    // a área de transferência. Em 100ms (antigo), apps lentos (browser, Slack) acabavam
+    // colando o conteúdo restaurado em vez do texto ditado.
+    static let clipboardRestoreDelay: TimeInterval = 0.600
+    // 50ms: evita só double-fire da própria liberação das teclas. Em 300ms (antigo),
+    // ditados em sequência rápida eram engolidos silenciosamente.
+    static let cooldownDuration: TimeInterval = 0.050
     static let tapReEnableInterval: TimeInterval = 5.0  // Check event tap health
     static let trailingDelay: TimeInterval = 0.200      // 200ms trailing audio after hotkey release (captures last word)
 

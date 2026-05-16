@@ -143,6 +143,15 @@ final class CorrectionsStore {
     }
 
     private func preserveCase(target: String, sample: String) -> String {
+        // Se o target tem case mista própria (ex: "NFe", "macOS", "iPhone"), respeita-o
+        // como forma canônica em vez de derivar caso da amostra.
+        let targetLetters = target.filter { $0.isLetter }
+        let hasUpper = targetLetters.contains(where: { $0.isUppercase })
+        let hasLower = targetLetters.contains(where: { $0.isLowercase })
+        if hasUpper && hasLower {
+            return target
+        }
+
         // Para amostras multi-palavra, considera só a primeira letra "alfabética".
         guard let firstLetter = sample.first(where: { $0.isLetter }) else { return target }
         let lettersOnly = sample.filter { $0.isLetter }

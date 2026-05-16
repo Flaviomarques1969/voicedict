@@ -42,6 +42,9 @@ class StateMachine {
         // A partir daí, todas as ditações usam swap de tap (instantâneo, sem cold start).
         whisperService.startEngine()
 
+        // Aquece converter + file I/O para que o primeiro aperto não perca ~100ms.
+        whisperService.prewarmRecording()
+
         hotkeyMonitor.onEvent = { [weak self] event in
             self?.handleHotkeyEvent(event)
         }
@@ -64,7 +67,11 @@ class StateMachine {
 
         switch (state, event) {
         case (.idle, .bothModifiersPressed):
-            guard Date().timeIntervalSince(lastProcessingEndTime) >= Config.cooldownDuration else { return }
+            let elapsed = Date().timeIntervalSince(lastProcessingEndTime)
+            guard elapsed >= Config.cooldownDuration else {
+                Log.d("⚠️ Cooldown bloqueou ativação (\(Int(elapsed * 1000))ms < \(Int(Config.cooldownDuration * 1000))ms)")
+                return
+            }
             transitionToActivating()
 
         case (.activating, .modifierReleased),

@@ -79,19 +79,18 @@ class WhisperService {
         process.executableURL = URL(fileURLWithPath: serverBin)
         let nThreads = ProcessInfo.processInfo.activeProcessorCount
         // Decoding args — NÃO MEXER sem ler antes:
-        // --beam-size 1 + --best-of 1 forçam greedy decoding. Defaults do whisper.cpp
-        // (beam=5, best-of=5) levam o medium em M2 Pro de ~600ms para 7-13s por frase
-        // de ditado, o que torna o app inutilizável. A diferença de qualidade em PT-BR
-        // para frases curtas é praticamente nula. Se for mexer, medir antes/depois com
-        // a mesma frase e o log mostrando "WhisperService: resultado (Xms)".
+        // beam=3 / best-of=3 é o meio-termo entre greedy (1) e os defaults (5).
+        // Greedy puro produz variações aleatórias entre gravações ("Pric" numa, "Sprig" noutra)
+        // que tornam o sistema de correções um jogo de pega-pega. Beam=3 estabiliza a saída
+        // com custo aceitável: frase curta ~600ms→1.2s, áudio de 55s ~1.9s→3.8s.
+        // Beam=5 (default) era 7-13s, inutilizável.
         process.arguments = [
             "-m", modelPath,
             "-l", "pt",
-            "--no-timestamps",
             "-t", "\(nThreads)",
             "--flash-attn",
-            "--beam-size", "1",
-            "--best-of", "1",
+            "--beam-size", "3",
+            "--best-of", "3",
             "--port", "\(serverPort)",
             "--host", "127.0.0.1",
         ]
@@ -284,12 +283,37 @@ class WhisperService {
 
     // MARK: - Recording
 
+    /// Aquece AVAudioConverter e file I/O fazendo um ciclo dummy de gravar+cancelar.
+    /// Sem isto, o primeiro startRecording() leva ~100ms (vs 1-4ms nos seguintes),
+    /// derrubando o início da primeira ditação. Deve ser chamado depois do engine pronto.
+    func prewarmRecording() {
+        guard engine != nil, persistentInputFormat != nil else { return }
+        if startRecording() {
+            cancel()
+            Log.d("WhisperService: pre-warm OK (converter + file caches aquecidos)")
+        }
+    }
+
     /// Troca o tap silencioso pelo tap de gravação — operação instantânea
     /// pois o engine já está rodando. Sem cold start.
     func startRecording() -> Bool {
         guard let eng = engine, let inputFormat = persistentInputFormat else {
             Log.d("WhisperService: engine não disponível")
             return false
+        }
+
+        // Garante que o engine está rodando antes de instalar o tap. Sem isso,
+        // se o macOS pausou o engine (ocioso longo, sleep parcial) antes do
+        // health check de 30s rodar, o tap é instalado num engine parado e
+        // não recebe áudio nenhum — o arquivo sai vazio e a ditação some.
+        if !eng.isRunning {
+            Log.d("WhisperService: engine pausado — religando antes de gravar")
+            do {
+                try eng.start()
+            } catch {
+                Log.d("WhisperService: falha ao religar engine: \(error)")
+                return false
+            }
         }
 
         let tmpPath = NSTemporaryDirectory() + "ditado_\(Int(Date().timeIntervalSince1970)).wav"
@@ -558,16 +582,15 @@ class WhisperService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: cliBin)
         let nThreads = ProcessInfo.processInfo.activeProcessorCount
-        // Decoding args greedy — espelha o que está no servidor (linhas ~81-93).
-        // beam=1 + best-of=1 mantém latência aceitável também no fallback CLI.
+        // Decoding args — espelha o que está no servidor (linhas ~81-93).
+        // beam=3 + best-of=3 estabiliza a saída sem inflacionar latência no fallback CLI.
         var args = [
             "-m", modelPath,
             "-f", audioPath,
             "-l", "pt",
-            "--no-timestamps",
             "-t", "\(nThreads)",
-            "--beam-size", "1",
-            "--best-of", "1",
+            "--beam-size", "3",
+            "--best-of", "3",
             "--flash-attn",
             "--no-prints",
         ]
@@ -621,6 +644,9 @@ class WhisperService {
         }
         text = text.replacingOccurrences(of: "\\[.*?\\]", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "\\(.*?\\)", with: "", options: .regularExpression)
+        // Normaliza whitespace — sem --no-timestamps cada segmento vem em linha separada
+        // com indentação, vira "   frase\n   frase" — colapsa em uma linha contínua.
+        text = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? nil : text
     }
