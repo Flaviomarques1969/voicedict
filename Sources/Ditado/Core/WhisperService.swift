@@ -102,12 +102,21 @@ class WhisperService {
         process.terminationHandler = { [weak self] proc in
             guard let self = self else { return }
             self.serverReady = false
-            if proc.terminationStatus != 0 && proc.terminationReason != .exit {
-                Log.d("WhisperService: servidor crashou (status \(proc.terminationStatus)) — reiniciando...")
-                DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
-                    self.serverProcess = nil
-                    self.launchServerProcess()
-                }
+            // Restart incondicional. A condição anterior (status != 0 && reason != .exit)
+            // deixava certas mortes do whisper-server passarem sem religamento (por exemplo
+            // quando o processo era encerrado limpo por algum signal handler). O resultado
+            // era o app rodar o resto da sessão no modo CLI lento. Agora qualquer término
+            // dispara uma tentativa de reinício — com guarda contra loop em launchServerProcess.
+            let reason: String
+            switch proc.terminationReason {
+            case .exit: reason = "exit"
+            case .uncaughtSignal: reason = "signal"
+            @unknown default: reason = "desconhecido"
+            }
+            Log.d("WhisperService: servidor encerrou (status=\(proc.terminationStatus), reason=\(reason)) — religando em 1s")
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                self.serverProcess = nil
+                self.launchServerProcess()
             }
         }
 
@@ -648,6 +657,44 @@ class WhisperService {
         // com indentação, vira "   frase\n   frase" — colapsa em uma linha contínua.
         text = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text
+        if text.isEmpty { return nil }
+
+        // Filtro de alucinação: em áudio curto, quieto, ou sem fala real, o Whisper
+        // tende a inventar frases vindas do treino em vídeos do YouTube. Quando a
+        // saída INTEIRA bate com uma dessas frases, descarta como se fosse silêncio.
+        // Não tocamos no texto quando a frase é só parte de uma transcrição maior —
+        // a regra é exigir match completo, sem pontuação, ignorando acento e caixa.
+        let folded = text
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .replacingOccurrences(of: "[.,!?;:…—–\\-]", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        let hallucinations: Set<String> = [
+            "e ate o proximo video",
+            "ate o proximo video",
+            "ate o proximo",
+            "obrigado por assistir",
+            "obrigado por assistirem",
+            "obrigado por verem o video",
+            "se inscreva no canal",
+            "se inscreva",
+            "nao esqueca de se inscrever",
+            "deixa o seu like",
+            "deixe seu like",
+            "deixe o like",
+            "comenta ai",
+            "ate a proxima",
+            "valeu pessoal",
+            "subtitled by",
+            "subtitles by",
+            "legendado por",
+            "transcrito por",
+        ]
+        if hallucinations.contains(folded) {
+            Log.d("WhisperService: descartando alucinação '\(text)'")
+            return nil
+        }
+
+        return text
     }
 }

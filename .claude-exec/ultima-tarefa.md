@@ -1,48 +1,37 @@
-TASK_DONE:
+TASK_INIT (2026-06-20):
+- Protocolo carregado: sim
+- Padrões carregados: sim
+- Ambiente alvo: desenvolvimento (app pessoal Mac local — não há produção protegida)
+- Produção protegida: sim (não se aplica a este app)
+- Autorização para produção: não se aplica
+- Pedido entendido: descobrir por que o Ditado.app (ditado por voz) parou de funcionar.
+- Critério de conclusão: causa objetiva identificada com evidência + app voltando a operar.
+
+TASK_DONE (2026-06-20):
 - Pedido original conferido: sim
 - Ambiente trabalhado: desenvolvimento (Mac local)
-- Produção foi alterada: não se aplica (app pessoal)
+- Produção foi alterada: não (app pessoal)
 - Se produção foi alterada, autorização explícita registrada: não se aplica
-- Arquivos reais inspecionados: sim (StateMachine, WhisperService, HotkeyMonitor, Constants, TextInserter, build.sh, /tmp/ditado.log)
-- Alterações feitas: sim
-- Testes/validação executados: sim — swift build OK em 4s, app relançado, log mostra novo binário com event tap criado e uma transcrição bem-sucedida pós-deploy ("A mensagem não chegou no meu celular." em 709ms)
-- Resultado: concluído
-- Pendências reais: nenhuma identificada após validação. Próxima ditação real do Flávio confirma se as 3 fontes de falha silenciosa foram realmente cortadas.
+- Arquivos reais inspecionados: sim (HotkeyMonitor.swift, Constants.swift, WhisperService.swift, README, git log/status, /tmp/ditado.log, processos do sistema)
+- Alterações feitas: sim — apenas operacional (matar motor órfão + reabrir app). NENHUM arquivo de código alterado nesta rodada.
+- Testes/validação executados: sim — app reaberto (pid 98311), whisper-server novo (pid 98315, porta 8178, HTTP 200), log confirma "Event tap CRIADO com sucesso!" + "AX trusted: true" + "StateMachine iniciada. Segure L-Shift + L-Control para ditar."
+- Resultado: concluído (causa raiz identificada e app operante); 1 ponto de uso a confirmar com o Flávio (combinação de teclas)
+- Pendências reais: confirmar com Flávio se ele estava apertando Shift+Command em vez de Shift+Control, ou se o Control está remapeado no macOS.
 
-### Arquivos alterados
-- Sources/Ditado/Util/Constants.swift  (2 constantes ajustadas)
-- Sources/Ditado/Core/WhisperService.swift  (guarda eng.isRunning antes de instalar tap)
-- Sources/Ditado/Core/StateMachine.swift  (log explícito quando cooldown bloqueia)
-- Ditado.app/Contents/MacOS/Ditado  (binário re-empacotado e re-assinado)
+### Diagnóstico (por que não funcionava)
+1. CAUSA IMEDIATA: o app da barra de menus (Ditado) NÃO estava em execução. Sem ele, a tecla de atalho não é escutada e nada acontece. O whisper-server (motor) tinha ficado órfão, de pé há 1 dia e 5 horas, sem o app.
+2. CAUSA DE USO (evidência no log da última sessão): a combinação que ARMA o ditado é Left Shift + Left Control. O código IGNORA de propósito qualquer combinação que inclua Command (HotkeyMonitor.swift:145-151: `extraModifiers = ... || anyCommand`). O log mostrava o Flávio apertando "L-SHIFT + L-CMD" (Shift + Command), que cai sempre em `modifierReleased | State: idle` — nunca grava.
 
-### O que foi preservado
-- Toda a lógica de watchdog, observers de mudança de configuração e health timer
-- Comportamento de prewarm, swap de tap, fallback CLI, prompt hint dinâmico, correções
-- TextInserter (sem mudança no código — só o delay externo)
-- Resources/Info.plist, fluxo do build.sh, scripts auxiliares
+### Correção aplicada (operacional, reversível)
+- `kill 37882` (whisper-server órfão) + `open Ditado.app`.
+- App subiu limpo; motor novo pronto na GPU; event tap criado; acessibilidade OK.
 
-### O que foi acrescentado
-- Em `Constants.swift`:
-  - `clipboardRestoreDelay`: 0.100 → 0.600 (impede que apps lentos colem o conteúdo restaurado em vez do texto ditado)
-  - `cooldownDuration`: 0.300 → 0.050 (libera ditados em sequência rápida)
-  - Comentários explicando os números
-- Em `WhisperService.startRecording`: bloco que verifica `eng.isRunning` e religa antes de instalar o tap de gravação (motor pausado pelo macOS deixava o tap mudo)
-- Em `StateMachine.handleHotkeyEvent`: log "⚠️ Cooldown bloqueou ativação (...)" quando o press é descartado pelo cooldown — futuro debug fica visível em /tmp/ditado.log
-
-### Validação executada
-- `swift build -c release` → Build complete! (4.16s), sem warning
-- `pkill` do Ditado antigo + `cp` do .build/release/Ditado para Ditado.app/Contents/MacOS/Ditado
-- `xattr -cr` no .app + `codesign --force --sign -` (identifier voltou pra `com.user.ditado`)
-- `tccutil reset Accessibility com.user.ditado` + abertura do painel de Privacidade
-- `open Ditado.app` → log mostra: `AX trusted: true`, `Event tap CRIADO com sucesso!`, primeiro ditado pós-deploy gravado e transcrito em 709ms
-
-### Checagem contra o pedido original
-- "audite" → 3 fontes de falha silenciosa identificadas (área de transferência restaurada cedo demais; cooldown engolindo retentativa rápida; motor pausado sem checagem)
-- "arrume" → 3 correções aplicadas, recompiladas e instaladas
-- "rápido" → ~4 minutos do diagnóstico até o app relançado
+### O que NÃO foi mexido
+- Código-fonte: intocado. Continua a alteração NÃO COMMITADA em WhisperService.swift (filtro de alucinação + restart incondicional do servidor) de sessão anterior — o binário instalado (16/05 10:48) já foi compilado com ela, mas ela nunca foi registrada no git. Preservada como está.
 
 ### Pendências ou riscos
-Nenhuma pendência identificada após a validação executada.
+- Confirmar combinação de teclas com o Flávio (Shift+Control, não Command).
+- Risco residual antigo (não endereçado): troca de áudio (AirPods/fones) durante uma ditação descarta o áudio silenciosamente.
 
-Risco residual conhecido (NÃO endereçado nesta rodada porque seria mexer no fluxo de áudio durante captura — risco maior que benefício):
-- Se o macOS disparar `AVAudioEngineConfigurationChange` durante uma ditação (você conecta AirPods, conecta fones, troca de saída/entrada), o áudio em andamento É descartado silenciosamente. Comportamento atual: pressionou, falou, soltou, nada aparece. Se acontecer de novo, dá pra adicionar feedback sonoro nesse caminho — me chama.
+--- TAREFA ANTERIOR (16/05/2026) preservada abaixo ---
+TASK_DONE: auditoria + correção de 3 fontes de falha silenciosa (clipboardRestoreDelay 0.100→0.600; cooldownDuration 0.300→0.050; checagem eng.isRunning antes do tap). Build OK, app reinstalado e validado com ditado de 709ms. Detalhe completo no histórico do git e nas mensagens da sessão.
